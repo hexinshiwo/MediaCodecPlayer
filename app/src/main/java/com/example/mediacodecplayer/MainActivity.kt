@@ -1,13 +1,10 @@
 package com.example.mediacodecplayer
 
 import android.app.Activity
-import android.os.Build
 import android.os.Bundle
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.View
 import android.widget.Button
-import androidx.annotation.RequiresApi
 
 class MainActivity : Activity() {
     private lateinit var player: Player
@@ -68,7 +65,7 @@ class MainActivity : Activity() {
 
         val reuseCodec = findViewById<Button>(R.id.reuseCodec)
         reuseCodec.setOnClickListener {
-            player.setNewFileAndSurface(
+            player.reuseCodecWithNewFileAndSurface(
                 "sample_h265.mp4",
                 surfaceView2.holder.surface
             ) // Seek to the specified position }

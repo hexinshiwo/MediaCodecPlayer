@@ -28,14 +28,14 @@ class Player(
     @Volatile
     private var audioPlayStatus: AudioPlayStatus = AudioPlayStatus.NOSTART
 
+    //暂停相关逻辑
     private var systemStartTime: Long = -1 // 记录系统时间对应的起始时间（微秒）
     private var isPaused = false
-    private var pauseStartTime: Long = -1
+    private var videoPauseStartTime: Long = -1
     private val pauseLock = Object()
 
-    private var isVideoSeeking = false
-    private var isAudioSeeking = false
-    private val seekLock = Object()
+    private var isNeedInterceptVideo = false
+    private var isNeedInterceptAudio = false
 
     private var videoPlayRunnable:Runnable? = null
     private var audioPlayRunnable:Runnable? = null
@@ -217,10 +217,10 @@ class Player(
     fun resume() {
         synchronized(pauseLock) {
             isPaused = false
-            if (pauseStartTime != -1L) {
+            if (videoPauseStartTime != -1L) {
                 val pauseEndTime = System.nanoTime() / 1000
-                systemStartTime += (pauseEndTime - pauseStartTime)
-                pauseStartTime = -1
+                systemStartTime += (pauseEndTime - videoPauseStartTime)
+                videoPauseStartTime = -1
             }
             pauseLock.notifyAll()
         }
@@ -270,10 +270,10 @@ class Player(
         }
         val seekPosition = if(seekMode == SeekMode.ACCURATE)  position  else -1
         if (needPlayAfterSeek) {
-            isVideoSeeking = true
+            isNeedInterceptVideo = true
             Log.d("test","decodeAndPlayVideoFrames start seek before")
             videoHandler.post {
-                isVideoSeeking = false
+                isNeedInterceptVideo = false
                 Log.d("test","decodeAndPlayVideoFrames start seek before 1111")
                 decodeAndPlayVideoFrames(seekPosition)
             }
@@ -382,7 +382,7 @@ class Player(
                         synchronized(pauseLock) {
                             if (isPaused) {
                                 //记录暂停时候的时间，如果不记录的话，resume的时候会跳帧
-                                pauseStartTime = System.nanoTime() / 1000
+                                videoPauseStartTime = System.nanoTime() / 1000
                             }
                             while (isPaused) {
                                 try {
@@ -395,12 +395,10 @@ class Player(
                     }
                     // 渲染帧，将解码后的帧显示在Surface上
                     videoDecoder?.releaseOutputBuffer(outputBufferIndex, true)
-                    // 检查是否seek
-                    synchronized(seekLock) {
-                        if (isVideoSeeking) {
-                            // seek的时候，强制标记输出处理完成
-                            outputDone = true
-                        }
+                    // 检查是否需要阻断
+                    if (isNeedInterceptVideo) {
+                        // seek的时候，强制标记输出处理完成
+                        outputDone = true
                     }
                 }
             }
@@ -487,9 +485,20 @@ class Player(
             }
 
             // 检查是否seek
-            if (isAudioSeeking) {
+            if (isNeedInterceptAudio) {
                 // seek的时候，强制标记输出处理完成
                 break
+            }
+
+            // 检查是否暂停
+            synchronized(pauseLock) {
+                while (isPaused) {
+                    try {
+                        pauseLock.wait()
+                    } catch (e: InterruptedException) {
+                        e.printStackTrace()
+                    }
+                }
             }
 
             // 从音频解码器中获取一个已经解码完成的输出缓冲区的索引
@@ -520,14 +529,11 @@ class Player(
         }
     }
 
-    public fun setNewFileAndSurface(fileName: String, surface: Surface) {
+    public fun reuseCodecWithNewFileAndSurface(fileName: String, surface: Surface) {
         // 从assets文件夹中获取文件描述符
         val assetFileDescriptor = context.assets.openFd(fileName)
-        synchronized(seekLock) {
-            isVideoSeeking = true
-
-        }
-        isAudioSeeking = true
+        isNeedInterceptVideo = true
+        isNeedInterceptAudio = true
         videoExtractor.release()
         // 重新设置视频解码器的数据源
         // 创建一个新的MediaExtractor对象
@@ -570,14 +576,14 @@ class Player(
             // 清空解码器的内部缓存
             videoDecoder?.flush()
             videoDecoder?.setOutputSurface(surface)
-            isVideoSeeking = false
+            isNeedInterceptVideo = false
             videoPlayRunnable?.let { videoHandler.post(it) }
         }
 
         audioHandler.post {
             // 清空解码器的内部缓存
             audioDecoder?.flush()
-            isAudioSeeking = false
+            isNeedInterceptAudio = false
             audioPlayRunnable?.let {
                 audioHandler.post(it)
             }
